@@ -192,7 +192,7 @@ class OppleCluster(XiaomiAqaraE1Cluster):
             id=0x00F6, type=types.uint16_t, access="rw", is_manufacturer_specific=True
         )
         # degrees of knob rotation that map to 0-100 % (Z2M: high=180, low=720)
-        sensitivity: Final = ZCLAttributeDef(
+        rotation_sensitivity: Final = ZCLAttributeDef(
             id=0x0234, type=types.uint16_t, access="rw", is_manufacturer_specific=True
         )
 
@@ -281,14 +281,16 @@ class OppleCluster(XiaomiAqaraE1Cluster):
         fallback_name="Reporting interval",
     )
     .number(
-        OppleCluster.AttributeDefs.sensitivity.name,
+        OppleCluster.AttributeDefs.rotation_sensitivity.name,
         OppleCluster.cluster_id,
         min_value=180,
         max_value=720,
         step=10,
         unit=DEGREE,
         mode="slider",
-        translation_key="sensitivity",
+        # keep the unique_id from before the attribute was renamed
+        unique_id_suffix="sensitivity",
+        translation_key="rotation_sensitivity",
         fallback_name="Rotation sensitivity",
     )
     .device_automation_triggers(
