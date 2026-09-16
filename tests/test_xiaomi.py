@@ -110,6 +110,7 @@ import zhaquirks.xiaomi.aqara.plug_eu
 import zhaquirks.xiaomi.aqara.roller_curtain_e1
 import zhaquirks.xiaomi.aqara.sensor_ht_agl02
 import zhaquirks.xiaomi.aqara.smoke
+import zhaquirks.xiaomi.aqara.switch_agl011
 import zhaquirks.xiaomi.aqara.switch_t1
 from zhaquirks.xiaomi.aqara.thermostat_agl001 import ScheduleEvent, ScheduleSettings
 import zhaquirks.xiaomi.aqara.weather
@@ -2729,3 +2730,102 @@ def test_air_monitor_attribute_scaling(zigpy_device_from_v2_quirk):
     temp = device.endpoints[1].device_temperature
     temp._update_attribute(DeviceTemperature.AttributeDefs.current_temperature.id, 25)
     assert temp.get("current_temperature") == 2500
+
+
+def _agl011_device(zigpy_device_from_v2_quirk):
+    return zigpy_device_from_v2_quirk(
+        AQARA,
+        "lumi.switch.agl011",
+        cluster_ids={
+            1: {
+                MultistateInput.cluster_id: ClusterType.Server,
+                ElectricalMeasurement.cluster_id: ClusterType.Server,
+            }
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "value, action",
+    [(0, "hold"), (1, "single"), (2, "double"), (255, "release")],
+)
+def test_dimmer_h2_knob_press(zigpy_device_from_v2_quirk, value, action):
+    """Test Aqara dimmer H2 EU emits events for knob presses."""
+    device = _agl011_device(zigpy_device_from_v2_quirk)
+
+    cluster = device.endpoints[1].multistate_input
+    listener = mock.MagicMock()
+    cluster.add_listener(listener)
+
+    cluster.update_attribute(MultistateInput.AttributeDefs.present_value.id, value)
+    listener.zha_send_event.assert_called_once_with(
+        action, {"value": value, "endpoint_id": 1}
+    )
+
+    listener.reset_mock()
+    cluster.update_attribute(MultistateInput.AttributeDefs.present_value.id, 3)
+    listener.zha_send_event.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "action_value, action, button_state",
+    [
+        (1, "start_rotating", "released"),
+        (2, "rotation", "released"),
+        (3, "stop_rotating", "released"),
+        (0x82, "rotation", "pressed"),
+    ],
+)
+def test_dimmer_h2_knob_rotation(
+    zigpy_device_from_v2_quirk, action_value, action, button_state
+):
+    """Test Aqara dimmer H2 EU emits buffered rotation events from endpoint 71."""
+    agl011 = zhaquirks.xiaomi.aqara.switch_agl011
+    device = _agl011_device(zigpy_device_from_v2_quirk)
+
+    cluster = device.endpoints[agl011.ROTATION_ENDPOINT].opple_cluster
+    assert isinstance(cluster, agl011.RotationCluster)
+    listener = mock.MagicMock()
+    cluster.add_listener(listener)
+
+    cluster.update_attribute(agl011.ROTATION_ANGLE, -18.0)
+    cluster.update_attribute(agl011.ROTATION_ANGLE_SPEED, 90.0)
+    cluster.update_attribute(agl011.ROTATION_TIME, 200)
+    cluster.update_attribute(agl011.ROTATION_PERCENT_SPEED, 50.0)
+    cluster.update_attribute(agl011.ROTATION_PERCENT, -10.0)
+    listener.zha_send_event.assert_not_called()
+
+    cluster.update_attribute(agl011.ROTATION_ACTION, action_value)
+    listener.zha_send_event.assert_called_once_with(
+        action,
+        {
+            "action_rotation_angle": -18.0,
+            "action_rotation_angle_speed": 90.0,
+            "action_rotation_time": 200,
+            "action_rotation_percent_speed": 50.0,
+            "action_rotation_percent": -10.0,
+            "action_rotation_button_state": button_state,
+        },
+    )
+
+    # the buffer is cleared after each event
+    listener.reset_mock()
+    cluster.update_attribute(agl011.ROTATION_ACTION, action_value)
+    listener.zha_send_event.assert_called_once_with(
+        action, {"action_rotation_button_state": button_state}
+    )
+
+    # unknown actions are ignored
+    listener.reset_mock()
+    cluster.update_attribute(agl011.ROTATION_ACTION, 4)
+    listener.zha_send_event.assert_not_called()
+
+
+def test_dimmer_h2_voltage_divisor(zigpy_device_from_v2_quirk):
+    """Test Aqara dimmer H2 EU reports rms_voltage in 0.1 V."""
+    device = _agl011_device(zigpy_device_from_v2_quirk)
+
+    cluster = device.endpoints[1].electrical_measurement
+    attrs = ElectricalMeasurement.AttributeDefs
+    assert cluster.get(attrs.ac_voltage_multiplier.name) == 1
+    assert cluster.get(attrs.ac_voltage_divisor.name) == 10
