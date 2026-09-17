@@ -15,12 +15,27 @@ from zigpy.zcl.foundation import BaseAttributeDefs, ZCLAttributeDef
 from zhaquirks import CustomCluster
 from zhaquirks.builder import DEGREE, QuirkBuilder
 from zhaquirks.const import (
+    ATTR_ID,
     BUTTON,
     COMMAND,
+    COMMAND_CONTINUED_ROTATING,
+    COMMAND_DOUBLE,
+    COMMAND_HOLD,
+    COMMAND_RELEASE,
+    COMMAND_SINGLE,
+    COMMAND_STARTED_ROTATING,
+    COMMAND_STOPPED_ROTATING,
+    CONTINUED_ROTATING,
     DOUBLE_PRESS,
+    ENDPOINT_ID,
     LONG_PRESS,
     LONG_RELEASE,
+    PRESS_TYPE,
+    ROTARY_KNOB,
     SHORT_PRESS,
+    STARTED_ROTATING,
+    STOPPED_ROTATING,
+    VALUE,
     ZHA_SEND_EVENT,
 )
 from zhaquirks.xiaomi import (
@@ -31,36 +46,21 @@ from zhaquirks.xiaomi import (
 
 # Knob presses are reported as MultistateInput present_value on endpoint 1
 BUTTON_ACTIONS = {
-    0: "hold",
-    1: "single",
-    2: "double",
-    255: "release",
+    0: COMMAND_HOLD,
+    1: COMMAND_SINGLE,
+    2: COMMAND_DOUBLE,
+    255: COMMAND_RELEASE,
 }
 
 # Knob rotation is reported on the manufacturer cluster of endpoint 71
 ROTATION_ENDPOINT = 71
-# 1=start, 2=rotation, 3=stop; sent last in the report frame
-ROTATION_ACTION = 0x023A
-# set on ROTATION_ACTION while the knob is held down during rotation
+# set on the rotation action while the knob is held down during rotation
 ROTATION_PRESSED_BIT = 0x80
-ROTATION_ANGLE = 0x022E  # degrees, negative = counter-clockwise
-ROTATION_ANGLE_SPEED = 0x0230
-ROTATION_TIME = 0x0231  # milliseconds
-ROTATION_PERCENT_SPEED = 0x0232  # sign is unreliable, don't use for direction
-ROTATION_PERCENT = 0x0233
 
 ROTATION_ACTIONS = {
-    1: "start_rotating",
-    2: "rotation",
-    3: "stop_rotating",
-}
-
-ROTATION_ATTRS = {
-    ROTATION_ANGLE: "action_rotation_angle",
-    ROTATION_ANGLE_SPEED: "action_rotation_angle_speed",
-    ROTATION_TIME: "action_rotation_time",
-    ROTATION_PERCENT_SPEED: "action_rotation_percent_speed",
-    ROTATION_PERCENT: "action_rotation_percent",
+    1: COMMAND_STARTED_ROTATING,
+    2: COMMAND_CONTINUED_ROTATING,
+    3: COMMAND_STOPPED_ROTATING,
 }
 
 
@@ -132,12 +132,52 @@ class MultistateInputCluster(CustomCluster, MultistateInput):
                 self.listener_event(
                     ZHA_SEND_EVENT,
                     action,
-                    {"value": value, "endpoint_id": self.endpoint.endpoint_id},
+                    {
+                        ENDPOINT_ID: self.endpoint.endpoint_id,
+                        PRESS_TYPE: action,
+                        ATTR_ID: attrid,
+                        VALUE: value,
+                    },
                 )
 
 
 class RotationCluster(XiaomiAqaraE1Cluster):
     """Aqara manufacturer cluster on the knob endpoint emitting rotation events."""
+
+    class AttributeDefs(BaseAttributeDefs):
+        """Attribute Definitions."""
+
+        # 1=started, 2=continued, 3=stopped; sent last in the report frame
+        rotation_action: Final = ZCLAttributeDef(
+            id=0x023A, type=types.uint8_t, access="rp", manufacturer_code=0x115F
+        )
+        # degrees, negative = counter-clockwise
+        rotation_angle: Final = ZCLAttributeDef(
+            id=0x022E, type=types.Single, access="rp", manufacturer_code=0x115F
+        )
+        rotation_angle_speed: Final = ZCLAttributeDef(
+            id=0x0230, type=types.Single, access="rp", manufacturer_code=0x115F
+        )
+        # milliseconds
+        rotation_time: Final = ZCLAttributeDef(
+            id=0x0231, type=types.uint32_t, access="rp", manufacturer_code=0x115F
+        )
+        # sign is unreliable, don't use it for the direction
+        rotation_percent_speed: Final = ZCLAttributeDef(
+            id=0x0232, type=types.Single, access="rp", manufacturer_code=0x115F
+        )
+        rotation_percent: Final = ZCLAttributeDef(
+            id=0x0233, type=types.Single, access="rp", manufacturer_code=0x115F
+        )
+
+    # event argument names, matching Zigbee2MQTT
+    ROTATION_ARGS = {
+        AttributeDefs.rotation_angle.id: "action_rotation_angle",
+        AttributeDefs.rotation_angle_speed.id: "action_rotation_angle_speed",
+        AttributeDefs.rotation_time.id: "action_rotation_time",
+        AttributeDefs.rotation_percent_speed.id: "action_rotation_percent_speed",
+        AttributeDefs.rotation_percent.id: "action_rotation_percent",
+    }
 
     def __init__(self, *args, **kwargs):
         """Init."""
@@ -148,21 +188,21 @@ class RotationCluster(XiaomiAqaraE1Cluster):
         super()._update_attribute(attrid, value)
 
         # the action is sent last, so buffer the telemetry until it arrives
-        if attrid in ROTATION_ATTRS:
-            self._rotation[ROTATION_ATTRS[attrid]] = value
+        if attrid in self.ROTATION_ARGS:
+            self._rotation[self.ROTATION_ARGS[attrid]] = value
             return
 
-        if attrid == ROTATION_ACTION:
+        if attrid == self.AttributeDefs.rotation_action.id:
+            rotation, self._rotation = self._rotation, {}
             action = ROTATION_ACTIONS.get(value & ~ROTATION_PRESSED_BIT)
             if action is None:
                 return
             event_args = {
-                **self._rotation,
+                **rotation,
                 "action_rotation_button_state": (
                     "pressed" if value & ROTATION_PRESSED_BIT else "released"
                 ),
             }
-            self._rotation = {}
             self.listener_event(ZHA_SEND_EVENT, action, event_args)
 
 
@@ -213,7 +253,7 @@ class OppleCluster(XiaomiAqaraE1Cluster):
     .replaces_endpoint(1, device_type=zha.DeviceType.DIMMABLE_LIGHT)
     .adds(DeviceTemperatureCluster)
     .adds(OppleCluster)
-    .replaces(MultistateInputCluster)
+    .replace_cluster_occurrences(MultistateInputCluster, replace_client_instances=False)
     .replaces(ElectricalMeasurementCluster)
     .adds_endpoint(ROTATION_ENDPOINT)
     .adds(RotationCluster, endpoint_id=ROTATION_ENDPOINT)
@@ -306,13 +346,13 @@ class OppleCluster(XiaomiAqaraE1Cluster):
     )
     .device_automation_triggers(
         {
-            (SHORT_PRESS, BUTTON): {COMMAND: "single"},
-            (DOUBLE_PRESS, BUTTON): {COMMAND: "double"},
-            (LONG_PRESS, BUTTON): {COMMAND: "hold"},
-            (LONG_RELEASE, BUTTON): {COMMAND: "release"},
-            ("start_rotating", "knob"): {COMMAND: "start_rotating"},
-            ("rotation", "knob"): {COMMAND: "rotation"},
-            ("stop_rotating", "knob"): {COMMAND: "stop_rotating"},
+            (SHORT_PRESS, BUTTON): {COMMAND: COMMAND_SINGLE},
+            (DOUBLE_PRESS, BUTTON): {COMMAND: COMMAND_DOUBLE},
+            (LONG_PRESS, BUTTON): {COMMAND: COMMAND_HOLD},
+            (LONG_RELEASE, BUTTON): {COMMAND: COMMAND_RELEASE},
+            (STARTED_ROTATING, ROTARY_KNOB): {COMMAND: COMMAND_STARTED_ROTATING},
+            (CONTINUED_ROTATING, ROTARY_KNOB): {COMMAND: COMMAND_CONTINUED_ROTATING},
+            (STOPPED_ROTATING, ROTARY_KNOB): {COMMAND: COMMAND_STOPPED_ROTATING},
         }
     )
     .add_to_registry()
