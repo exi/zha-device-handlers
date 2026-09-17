@@ -2829,3 +2829,31 @@ def test_dimmer_h2_voltage_divisor(zigpy_device_from_v2_quirk):
     attrs = ElectricalMeasurement.AttributeDefs
     assert cluster.get(attrs.ac_voltage_multiplier.name) == 1
     assert cluster.get(attrs.ac_voltage_divisor.name) == 10
+
+    # the Xiaomi report sends voltage in 0.01 V
+    device.endpoints[1].opple_cluster.update_attribute(
+        XIAOMI_AQARA_ATTRIBUTE_E1,
+        create_aqara_attr_report({150: t.Single(23245.7)}),
+    )
+    assert cluster.get(attrs.rms_voltage.name) == pytest.approx(2324.57)
+
+
+async def test_dimmer_h2_voltage_read_locally(zigpy_device_from_v2_quirk):
+    """Test Aqara dimmer H2 EU never reads rms_voltage from the device.
+
+    The device answers with UNSUPPORTED_ATTRIBUTE, which would make ZHA drop the
+    voltage sensor.
+    """
+    device = _agl011_device(zigpy_device_from_v2_quirk)
+
+    cluster = device.endpoints[1].electrical_measurement
+    attrs = ElectricalMeasurement.AttributeDefs
+    with mock.patch.object(device, "request") as request_mock:
+        success, failure = await cluster.read_attributes(
+            [attrs.rms_voltage.name, attrs.active_power.name]
+        )
+
+    request_mock.assert_not_called()
+    assert success == {attrs.rms_voltage.name: 0, attrs.active_power.name: 0}
+    assert not failure
+    assert not cluster.is_attribute_unsupported(attrs.rms_voltage.name)

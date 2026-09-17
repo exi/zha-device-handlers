@@ -23,7 +23,11 @@ from zhaquirks.const import (
     SHORT_PRESS,
     ZHA_SEND_EVENT,
 )
-from zhaquirks.xiaomi import DeviceTemperatureCluster, XiaomiAqaraE1Cluster
+from zhaquirks.xiaomi import (
+    DeviceTemperatureCluster,
+    ElectricalMeasurementCluster as XiaomiElectricalMeasurementCluster,
+    XiaomiAqaraE1Cluster,
+)
 
 # Knob presses are reported as MultistateInput present_value on endpoint 1
 BUTTON_ACTIONS = {
@@ -101,10 +105,17 @@ class MultiClick(types.enum8):
     Multi = 0x02
 
 
-class ElectricalMeasurementCluster(CustomCluster, ElectricalMeasurement):
-    """Electrical measurement cluster reporting rms_voltage in 0.1 V."""
+class ElectricalMeasurementCluster(XiaomiElectricalMeasurementCluster):
+    """Local electrical measurement cluster fed by the Xiaomi attribute report.
+
+    The device answers direct rms_voltage reads with UNSUPPORTED_ATTRIBUTE,
+    which would make ZHA drop the voltage sensor, so reads are served locally.
+    The report sends voltage in 0.01 V and the shared handler scales it by 0.1,
+    so the cached rms_voltage is in 0.1 V.
+    """
 
     _CONSTANT_ATTRIBUTES = {
+        **XiaomiElectricalMeasurementCluster._CONSTANT_ATTRIBUTES,
         ElectricalMeasurement.AttributeDefs.ac_voltage_multiplier.id: 1,
         ElectricalMeasurement.AttributeDefs.ac_voltage_divisor.id: 10,
     }
