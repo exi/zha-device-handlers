@@ -52,12 +52,17 @@ BUTTON_ACTIONS = {
     255: COMMAND_RELEASE,
 }
 
-# Knob rotation is reported on the manufacturer cluster of endpoint 71
+# Knob rotation is reported on the manufacturer cluster of endpoint 71, or of
+# endpoint 72 when the knob is held down while turning. A press that comes with
+# a rotation is not reported as a press at all.
 ROTATION_ENDPOINT = 71
-# set on the rotation action while the knob is held down during rotation
+ROTATION_PRESSED_ENDPOINT = 72
+# alternative way of flagging a held knob, documented by Zigbee2MQTT
 ROTATION_PRESSED_BIT = 0x80
 
 ROTATION_ACTIONS = {
+    # firmware 0x1018 starts with 0, Zigbee2MQTT documents 1
+    0: COMMAND_STARTED_ROTATING,
     1: COMMAND_STARTED_ROTATING,
     2: COMMAND_CONTINUED_ROTATING,
     3: COMMAND_STOPPED_ROTATING,
@@ -144,6 +149,9 @@ class MultistateInputCluster(CustomCluster, MultistateInput):
 class RotationCluster(XiaomiAqaraE1Cluster):
     """Aqara manufacturer cluster on the knob endpoint emitting rotation events."""
 
+    # whether this endpoint reports rotation with the knob held down
+    _knob_pressed: bool = False
+
     class AttributeDefs(BaseAttributeDefs):
         """Attribute Definitions."""
 
@@ -197,13 +205,18 @@ class RotationCluster(XiaomiAqaraE1Cluster):
             action = ROTATION_ACTIONS.get(value & ~ROTATION_PRESSED_BIT)
             if action is None:
                 return
+            pressed = self._knob_pressed or bool(value & ROTATION_PRESSED_BIT)
             event_args = {
                 **rotation,
-                "action_rotation_button_state": (
-                    "pressed" if value & ROTATION_PRESSED_BIT else "released"
-                ),
+                "action_rotation_button_state": "pressed" if pressed else "released",
             }
             self.listener_event(ZHA_SEND_EVENT, action, event_args)
+
+
+class PressedRotationCluster(RotationCluster):
+    """Rotation cluster of the endpoint used while the knob is held down."""
+
+    _knob_pressed = True
 
 
 class OppleCluster(XiaomiAqaraE1Cluster):
@@ -257,6 +270,8 @@ class OppleCluster(XiaomiAqaraE1Cluster):
     .replaces(ElectricalMeasurementCluster)
     .adds_endpoint(ROTATION_ENDPOINT)
     .adds(RotationCluster, endpoint_id=ROTATION_ENDPOINT)
+    .adds_endpoint(ROTATION_PRESSED_ENDPOINT)
+    .adds(PressedRotationCluster, endpoint_id=ROTATION_PRESSED_ENDPOINT)
     .switch(
         OppleCluster.AttributeDefs.flip_indicator_light.name,
         OppleCluster.cluster_id,

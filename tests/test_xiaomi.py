@@ -2807,23 +2807,30 @@ def test_dimmer_h2_knob_press_all_endpoints(zigpy_device_from_v2_quirk):
 
 
 @pytest.mark.parametrize(
-    "action_value, action, button_state",
+    "endpoint_id, action_value, action, button_state",
     [
-        (1, COMMAND_STARTED_ROTATING, "released"),
-        (2, COMMAND_CONTINUED_ROTATING, "released"),
-        (3, COMMAND_STOPPED_ROTATING, "released"),
-        (0x82, COMMAND_CONTINUED_ROTATING, "pressed"),
+        # the device sends 0 to start rotating, Zigbee2MQTT documents 1
+        (71, 0, COMMAND_STARTED_ROTATING, "released"),
+        (71, 1, COMMAND_STARTED_ROTATING, "released"),
+        (71, 2, COMMAND_CONTINUED_ROTATING, "released"),
+        (71, 3, COMMAND_STOPPED_ROTATING, "released"),
+        (71, 0x82, COMMAND_CONTINUED_ROTATING, "pressed"),
+        # endpoint 72 is used while the knob is held down
+        (72, 0, COMMAND_STARTED_ROTATING, "pressed"),
+        (72, 2, COMMAND_CONTINUED_ROTATING, "pressed"),
+        (72, 3, COMMAND_STOPPED_ROTATING, "pressed"),
     ],
 )
 def test_dimmer_h2_knob_rotation(
-    zigpy_device_from_v2_quirk, action_value, action, button_state
+    zigpy_device_from_v2_quirk, endpoint_id, action_value, action, button_state
 ):
-    """Test Aqara dimmer H2 EU emits buffered rotation events from endpoint 71."""
+    """Test Aqara dimmer H2 EU emits buffered rotation events."""
     agl011 = zhaquirks.xiaomi.aqara.switch_agl011
     device = _agl011_device(zigpy_device_from_v2_quirk)
 
-    cluster = device.endpoints[agl011.ROTATION_ENDPOINT].opple_cluster
+    cluster = device.endpoints[endpoint_id].opple_cluster
     assert isinstance(cluster, agl011.RotationCluster)
+    assert (cluster.__class__ is agl011.PressedRotationCluster) == (endpoint_id == 72)
     listener = mock.MagicMock()
     cluster.add_listener(listener)
 
